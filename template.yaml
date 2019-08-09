@@ -13,6 +13,34 @@ Parameters:
     ConstraintDescription: 'Required. Can be characters and underscore only. No numbers or special characters allowed.'
 
 Resources:
+  ScheduledResponderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./lambda_handlers/
+      Runtime: python3.7
+      Handler: scheduled_handler.handle_trigger
+      Environment:
+        Variables:
+          CONNECTIONS_TABLE_NAME: !Ref TableName
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TableName
+#      Events:
+#        Regularly:
+#          Type: Schedule
+#          Properties:
+#            Schedule: rate(1 minute)
+
+  ScheduledResponderPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - "ScheduledResponderFunction"
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ScheduledResponderFunction
+      Principal: lambda.amazonaws.com
+
+  # A single function to handle the API Gateway routes
   DefaultHandlerFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -26,15 +54,7 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref TableName
 
-  HandlerPermission:
-    Type: AWS::Lambda::Permission
-    DependsOn:
-      - "DefaultHandlerFunction"
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !Ref DefaultHandlerFunction
-      Principal: apigateway.amazonaws.com
-
+  # Note that the API Gateway has the WEBSOCKET protocol
   DemoAPI:
     Type: AWS::ApiGatewayV2::Api
     Properties:
@@ -42,18 +62,8 @@ Resources:
       ProtocolType: WEBSOCKET
       RouteSelectionExpression: "$request.body.action"
 
-  DelayedPingRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref DemoAPI
-      RouteKey: DelayedPing
-      AuthorizationType: NONE
-      OperationName: DelayedPingRoute
-      Target: !Join
-        - '/'
-        - - 'integrations'
-          - !Ref DefaultIntegration
-
+  # We need 3 routes for the Websocket gateway to function:
+  # The $connect route, which is called while a websocket connection is set up
   ConnectRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
@@ -66,18 +76,7 @@ Resources:
         - - 'integrations'
           - !Ref DefaultIntegration
 
-  DefaultRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref DemoAPI
-      RouteKey: $default
-      AuthorizationType: NONE
-      OperationName: DefaultRoute
-      Target: !Join
-        - '/'
-        - - 'integrations'
-          - !Ref DefaultIntegration
-
+  # The $disconnect route, which is called automatically when the websocket connection is closed.
   DisconnectRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
@@ -90,7 +89,21 @@ Resources:
         - - 'integrations'
           - !Ref DefaultIntegration
 
-  # We're using a single integration for this simple solution.
+  # The $default route, which is called for every other message not matching the RouteSelectionExpression of the API.
+  # For this demo, this route will be used to schedule events. Normally, you could add distinct routes for actions,
+  # e.g. with a RouteKey of 'schedule'.
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref DemoAPI
+      RouteKey: $default
+      AuthorizationType: NONE
+      OperationName: DefaultRoute
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref DefaultIntegration
+
   DefaultIntegration:
     Type: AWS::ApiGatewayV2::Integration
     Properties:
@@ -101,7 +114,15 @@ Resources:
         Fn::Sub:
           arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DefaultHandlerFunction.Arn}/invocations
 
-  # Gateway deployment
+  HandlerPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - "DefaultHandlerFunction"
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DefaultHandlerFunction
+      Principal: apigateway.amazonaws.com
+
   Deployment:
     Type: AWS::ApiGatewayV2::Deployment
     Properties:
@@ -109,9 +130,7 @@ Resources:
     DependsOn:
       - ConnectRoute
       - DisconnectRoute
-      - "DelayedPingRoute"
 
-  # Gateway deployment stage
   Stage:
     Type: AWS::ApiGatewayV2::Stage
     Properties:
