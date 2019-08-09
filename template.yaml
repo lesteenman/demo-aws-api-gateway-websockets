@@ -16,7 +16,7 @@ Resources:
   DefaultHandlerFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: ./handlers/handler.py
+      CodeUri: ./lambda_handlers/
       Runtime: python3.7
       Handler: handler.handle_gateway_request
       Environment:
