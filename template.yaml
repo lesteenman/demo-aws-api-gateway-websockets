@@ -13,20 +13,26 @@ Parameters:
     ConstraintDescription: 'Required. Can be characters and underscore only. No numbers or special characters allowed.'
 
 Resources:
-  DefaultHandler:
+  DefaultHandlerFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ./handlers/handler.py
       Runtime: python3.7
       Handler: handler.handle_gateway_request
+      Environment:
+        Variables:
+          CONNECTIONS_TABLE_NAME: !Ref TableName
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TableName
 
   HandlerPermission:
     Type: AWS::Lambda::Permission
     DependsOn:
-      - "DefaultHandler"
+      - "DefaultHandlerFunction"
     Properties:
       Action: lambda:InvokeFunction
-      FunctionName: !Ref DefaultHandler
+      FunctionName: !Ref DefaultHandlerFunction
       Principal: apigateway.amazonaws.com
 
   DemoAPI:
@@ -34,15 +40,15 @@ Resources:
     Properties:
       Name: DemoAPI
       ProtocolType: WEBSOCKET
-      RouteSelectionExpression: "$request.body.dummy"
+      RouteSelectionExpression: "$request.body.action"
 
-  PingRoute:
+  DelayedPingRoute:
     Type: AWS::ApiGatewayV2::Route
     Properties:
       ApiId: !Ref DemoAPI
-      RouteKey: ping
+      RouteKey: DelayedPing
       AuthorizationType: NONE
-      OperationName: PingRoute
+      OperationName: DelayedPingRoute
       Target: !Join
         - '/'
         - - 'integrations'
@@ -93,7 +99,7 @@ Resources:
       IntegrationType: AWS_PROXY
       IntegrationUri:
         Fn::Sub:
-          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DefaultHandler.Arn}/invocations
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DefaultHandlerFunction.Arn}/invocations
 
   # Gateway deployment
   Deployment:
@@ -103,7 +109,7 @@ Resources:
     DependsOn:
       - ConnectRoute
       - DisconnectRoute
-      - PingRoute
+      - "DelayedPingRoute"
 
   # Gateway deployment stage
   Stage:
@@ -111,36 +117,36 @@ Resources:
     Properties:
       ApiId: !Ref DemoAPI
       DeploymentId: !Ref Deployment
-      StageName: Prod
-      Description: Prod Stage
+      StageName: Dev
+      Description: Dev Stage
       DefaultRouteSettings:
         LoggingLevel: "INFO"
 
-#  ConnectionsTable:
-#    Type: AWS::DynamoDB::Table
-#    Properties:
-#      AttributeDefinitions:
-#        - AttributeName: "connectionId"
-#          AttributeType: "S"
-#      KeySchema:
-#        - AttributeName: "connectionId"
-#          KeyType: "HASH"
-#      ProvisionedThroughput:
-#        ReadCapacityUnits: 5
-#        WriteCapacityUnits: 5
-#      SSESpecification:
-#        SSEEnabled: True
-#      TableName: !Ref TableName
+  ConnectionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "connectionId"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "connectionId"
+          KeyType: "HASH"
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      SSESpecification:
+        SSEEnabled: True
+      TableName: !Ref TableName
 
 
 Outputs:
-  #  ConnectionsTableArn:
-  #    Description: "Connections table ARN"
-  #    Value: !GetAtt ConnectionsTable.Arn
+  ConnectionsTableArn:
+    Description: "Connections table ARN"
+    Value: !GetAtt ConnectionsTable.Arn
 
   OnConnectFunctionArn:
     Description: "OnConnect function ARN"
-    Value: !GetAtt DefaultHandler.Arn
+    Value: "DefaultHandlerFunction"
 
   WebSocketURI:
     Description: "The WSS Protocol URI to connect to"
