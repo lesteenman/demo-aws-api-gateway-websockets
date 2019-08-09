@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: 'AWS::Serverless-2016-10-31'
+Description: A very simple demo to demonstrate Websockets on the API Gateway
+
+Parameters:
+  TableName:
+    Type: String
+    Default: 'demo_api_connections'
+    Description: (Required) The name of the new DynamoDB to store connection identifiers for each connected clients. Minimum 3 characters
+    MinLength: 3
+    MaxLength: 50
+    AllowedPattern: ^[A-Za-z_]+$
+    ConstraintDescription: 'Required. Can be characters and underscore only. No numbers or special characters allowed.'
+
+Resources:
+  DefaultHandler:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./handlers/handler.py
+      Runtime: python3.7
+      Handler: handler.handle_gateway_request
+
+  HandlerPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+      - "DefaultHandler"
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DefaultHandler
+      Principal: apigateway.amazonaws.com
+
+  DemoAPI:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: DemoAPI
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: "$request.body.dummy"
+
+  PingRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref DemoAPI
+      RouteKey: ping
+      AuthorizationType: NONE
+      OperationName: PingRoute
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref DefaultIntegration
+
+  ConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref DemoAPI
+      RouteKey: $connect
+      AuthorizationType: NONE
+      OperationName: ConnectRoute
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref DefaultIntegration
+
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref DemoAPI
+      RouteKey: $default
+      AuthorizationType: NONE
+      OperationName: DefaultRoute
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref DefaultIntegration
+
+  DisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref DemoAPI
+      RouteKey: $disconnect
+      AuthorizationType: NONE
+      OperationName: DisconnectRoute
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref DefaultIntegration
+
+  # We're using a single integration for this simple solution.
+  DefaultIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref DemoAPI
+      Description: A default integration that's called for all routes
+      IntegrationType: AWS_PROXY
+      IntegrationUri:
+        Fn::Sub:
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DefaultHandler.Arn}/invocations
+
+  # Gateway deployment
+  Deployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    Properties:
+      ApiId: !Ref DemoAPI
+    DependsOn:
+      - ConnectRoute
+      - DisconnectRoute
+      - PingRoute
+
+  # Gateway deployment stage
+  Stage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref DemoAPI
+      DeploymentId: !Ref Deployment
+      StageName: Prod
+      Description: Prod Stage
+      DefaultRouteSettings:
+        LoggingLevel: "INFO"
+
+#  ConnectionsTable:
+#    Type: AWS::DynamoDB::Table
+#    Properties:
+#      AttributeDefinitions:
+#        - AttributeName: "connectionId"
+#          AttributeType: "S"
+#      KeySchema:
+#        - AttributeName: "connectionId"
+#          KeyType: "HASH"
+#      ProvisionedThroughput:
+#        ReadCapacityUnits: 5
+#        WriteCapacityUnits: 5
+#      SSESpecification:
+#        SSEEnabled: True
+#      TableName: !Ref TableName
+
+
+Outputs:
+  #  ConnectionsTableArn:
+  #    Description: "Connections table ARN"
+  #    Value: !GetAtt ConnectionsTable.Arn
+
+  OnConnectFunctionArn:
+    Description: "OnConnect function ARN"
+    Value: !GetAtt DefaultHandler.Arn
+
+  WebSocketURI:
+    Description: "The WSS Protocol URI to connect to"
+    Value: !Join [ '', [ 'wss://', !Ref DemoAPI, '.execute-api.',!Ref 'AWS::Region','.amazonaws.com/',!Ref 'Stage'] ]
+
